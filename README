@@ -1,3 +1,6 @@
+for more infomation about combo idea, visit this blog:
+http://www.yuiblog.com/blog/2008/07/16/combohandler/
+
 *INSTALL
 cd nginx-a.b.c
 ./configure --add-module=path/ngx_http_combo_module
