@@ -4,6 +4,9 @@
  * history:
  *	2012-01-12 create
  *	2012-01-14 fix the bug of ngx_http_combo_is_valid_ext.
+ *  2012-01-28
+		1. bugfix: when strip setted and no strip version in request filename, then nginx process crashed.
+		2. new feather: add path support.
  */
  
 /**
@@ -44,10 +47,11 @@ static void *ngx_http_combo_create_conf(ngx_conf_t *cf);
 static char *ngx_http_combo_merge_conf(ngx_conf_t *cf, void *parent, void *child);
 static ngx_int_t ngx_http_combo_handler(ngx_http_request_t *r);
 static ngx_chain_t* ngx_http_combo_get_chain(ngx_http_request_t *r);
-static int ngx_http_combo_file(ngx_http_request_t *r, ngx_http_core_loc_conf_t* clcf, const char* file, ngx_flag_t strip, ngx_chain_t *out);
+static int ngx_http_combo_file(ngx_http_request_t *r, ngx_http_core_loc_conf_t* clcf, const ngx_str_t *prepath,
+			const char* file, ngx_flag_t strip, ngx_chain_t *out);
 static char* ngx_http_combo_cstr_t(ngx_pool_t* pool, ngx_str_t* s);
 static char* ngx_http_combo_cstr_b(ngx_pool_t* pool, u_char* s, size_t len);
-static ngx_str_t ngx_http_combo_get_filename(ngx_pool_t* pool, const ngx_str_t* path, const char* file);
+static ngx_str_t ngx_http_combo_get_filename(ngx_pool_t* pool, const ngx_str_t* path, const ngx_str_t *prepath, const char* file);
 static int ngx_http_combo_strip_filename(ngx_str_t* filename);
 static int ngx_http_combo_is_valid_ext(const char* ext, const char* exts);
  
@@ -200,9 +204,11 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 	ngx_int_t rc;
 	ngx_http_combo_conf_t  *conf;
 	ngx_http_core_loc_conf_t *clcf;
+	ngx_str_t prepath;
  
 	file = token = fext = ext = NULL;
  
+	ngx_memzero(&prepath, sizeof(ngx_str_t));
 	ngx_memzero(&chain, sizeof(ngx_chain_t));
 	out = &chain;
  
@@ -235,6 +241,18 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 	do {
 		token = ngx_strchr(file, conf->seperator.data[1]);
 		if (token) {
+			if (token == file) {
+				// empty file name, reset prepath.
+				++file;
+				ngx_memzero(&prepath, sizeof(ngx_str_t));
+				continue;
+			} else if (*(token-1) == '/') {
+				// path
+				prepath.data = file;
+				prepath.len  = token - file;
+				file = token + 1;
+				continue;				
+			}
 			*token = 0;	/* seperate file */
 		} else if (conf->seperator.len > 2) {
 			// no seperate, so check tail
@@ -245,11 +263,6 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 			}
 		}
  
-		if (token == file) {
-			// empty file name
-			++file;
-			continue;
-		}
  
 		// all the file must be the same extension
 		ext = strrchr(file, '.');
@@ -273,7 +286,7 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 		}
  
 		/* read file content */
-		rc = ngx_http_combo_file(r, clcf, file, conf->strip, out);
+		rc = ngx_http_combo_file(r, clcf, &prepath, file, conf->strip, out);
 		if (rc != NGX_HTTP_OK) {
 			return rc;
 		}
@@ -316,18 +329,21 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 }
  
 static ngx_str_t
-ngx_http_combo_get_filename(ngx_pool_t* pool, const ngx_str_t* path, const char* file)
+ngx_http_combo_get_filename(ngx_pool_t* pool, const ngx_str_t* path, const ngx_str_t *prepath, const char* file)
 {
 	int			namelen = 0;
 	ngx_str_t	filename;
 	u_char*		p = NULL;
  
 	namelen = ngx_strlen(file);
-	filename.len = path->len + namelen + 1;
+	filename.len = path->len + prepath->len + namelen + 1;
 	filename.data = ngx_pcalloc(pool, filename.len + 1);
 	if (filename.data) {
 		p = ngx_cpymem(filename.data, path->data, path->len);
 		*p++ = '/';
+		if (prepath->len) {
+			p = ngx_cpymem(p, prepath->data, prepath->len);
+		}
 		p = ngx_cpymem(p, file, namelen);
 		filename.data[filename.len] = 0;
 	} else {
@@ -355,7 +371,7 @@ ngx_http_combo_strip_filename(ngx_str_t *filename)
 		} while(dot > filename->data && isdigit(*dot));
  
 		if (dot == filename->data || *dot != '.') {
-			ngx_memzero(&filename, sizeof(ngx_str_t));
+			ngx_memzero(filename, sizeof(ngx_str_t));
 		} else {
 			strcpy((char*)dot, (const char*)ext); // i know ext end with '\0'
 			filename->len -= (ext - dot);
@@ -365,14 +381,14 @@ ngx_http_combo_strip_filename(ngx_str_t *filename)
 }
  
 static int
-ngx_http_combo_file(ngx_http_request_t *r, ngx_http_core_loc_conf_t *clcf, const char* file, ngx_flag_t strip, ngx_chain_t *out)
+ngx_http_combo_file(ngx_http_request_t *r, ngx_http_core_loc_conf_t *clcf, const ngx_str_t *prepath, const char* file, ngx_flag_t strip, ngx_chain_t *out)
 {
 	ngx_buf_t *b = NULL;
 	ngx_str_t filename;
 	ngx_open_file_info_t of;
-	int		ret = NGX_HTTP_OK;
+	int	ret = NGX_HTTP_OK;
  
-	filename = ngx_http_combo_get_filename(r->pool, &clcf->root, file);
+	filename = ngx_http_combo_get_filename(r->pool, &clcf->root, prepath, file);
 	if (!filename.len) {
 		return NGX_HTTP_INTERNAL_SERVER_ERROR;
 	}
