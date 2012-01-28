@@ -37,7 +37,22 @@ here is some samples to understand this configuration:
 '(&)'     /foo(a.js&b.js&c.js)20120114
 '!;!'     /foo!a.js;b.js;c.js!20120114
 
+*PATH
+in some enviroment, the comboed files all in one path, or almost in one path, for example, we need combo these files:
+------------------------------------
+js/plugin/p1.js
+js/plugin/p2.js
+...
+js/core.js
+js/core2.js
+...
+common.js
+--------------------------------------
+path prefix 'js/plugin/' wastes too much. Here is a way to shorten the request uri:
+http://host/combo?js/plugin/&p1.js&p2.js&p3.js&p4.js&p5.js&js/&core.js&core2.js&&common.js
 
-
+Here is the rules:
+1. when a file last char is '/', it means this is a path prefix to the next files;
+2. an empty file such like '&&' upon, means reset prefix.
 
 
