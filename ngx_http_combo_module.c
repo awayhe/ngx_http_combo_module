@@ -248,7 +248,7 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 				continue;
 			} else if (*(token-1) == '/') {
 				// path
-				prepath.data = file;
+				prepath.data = (u_char*)file;
 				prepath.len  = token - file;
 				file = token + 1;
 				continue;				
@@ -373,7 +373,7 @@ ngx_http_combo_strip_filename(ngx_str_t *filename)
 		if (dot == filename->data || *dot != '.') {
 			ngx_memzero(filename, sizeof(ngx_str_t));
 		} else {
-			strcpy((char*)dot, (const char*)ext); // i know ext end with '\0'
+			memmove(dot, ext, strlen((const char*)ext) + 1); // i know ext end with '\0'
 			filename->len -= (ext - dot);
 		}
 	}
