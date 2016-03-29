@@ -54,6 +54,7 @@ static char* ngx_http_combo_cstr_b(ngx_pool_t* pool, u_char* s, size_t len);
 static ngx_str_t ngx_http_combo_get_filename(ngx_pool_t* pool, const ngx_str_t* path, const ngx_str_t *prepath, const char* file);
 static int ngx_http_combo_strip_filename(ngx_str_t* filename);
 static int ngx_http_combo_is_valid_ext(const char* ext, const char* exts);
+static u_char* ngx_http_combo_strrnchr(u_char *s, size_t len, int c);
  
 static ngx_command_t  ngx_http_combo_commands[] = {
  
@@ -117,7 +118,7 @@ static ngx_http_module_t  ngx_http_combo_module_ctx = {
 	ngx_http_combo_merge_conf	 /* merge location configuration */
 };
  
-static u_char ngx_combo_default_seperator[] = "?&";
+static u_char ngx_combo_default_seperator[] = "?&!";
 static u_char ngx_combo_default_exts[] = ".js .json .css .html .txt";
  
 static ngx_str_t ngx_combo_type_js		= ngx_string("application/x-javascript");
@@ -236,6 +237,15 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 	if (!file) {
 		return NGX_HTTP_BAD_REQUEST;
 	}
+
+	if (conf->seperator.len > 2) {
+		// no seperate, so check tail
+		token = ngx_strchr(file, conf->seperator.data[2]);
+		if (token) {
+			*token = 0;
+			token = NULL;
+		}
+	}
  
 	/* get path */
 	do {
@@ -254,15 +264,7 @@ ngx_http_combo_handler(ngx_http_request_t *r)
 				continue;				
 			}
 			*token = 0;	/* seperate file */
-		} else if (conf->seperator.len > 2) {
-			// no seperate, so check tail
-			token = ngx_strchr(file, conf->seperator.data[2]);
-			if (token) {
-				*token = 0;
-				token = NULL;
-			}
 		}
- 
  
 		// all the file must be the same extension
 		ext = strrchr(file, '.');
@@ -351,7 +353,19 @@ ngx_http_combo_get_filename(ngx_pool_t* pool, const ngx_str_t* path, const ngx_s
 	}
 	return filename;
 }
- 
+
+static u_char*
+ngx_http_combo_strrnchr(u_char *s, size_t len, int c)
+{
+	u_char* t = s + len ;
+	while (t >= s) {
+		if ((int)*t == c) {
+			return t;
+		}
+	}
+	return NULL;
+}
+
 /*
 	convert xxx.yyy.123467890.zz to xxx.yyy.zz, xxx.yyy..zz also ok
 */
@@ -360,7 +374,7 @@ ngx_http_combo_strip_filename(ngx_str_t *filename)
 {
 	/* the buffer filename will be modify */
 	u_char* ext = NULL;
-	u_char* dot = (u_char*)strrchr((const char*)filename->data, '.');
+	u_char* dot = ngx_http_combo_strrnchr(filename->data, filename->len, '.');
 	if (NULL == dot) {
 		ngx_memzero(&filename, sizeof(ngx_str_t));
 	} else {
@@ -373,7 +387,8 @@ ngx_http_combo_strip_filename(ngx_str_t *filename)
 		if (dot == filename->data || *dot != '.') {
 			ngx_memzero(filename, sizeof(ngx_str_t));
 		} else {
-			memmove(dot, ext, strlen((const char*)ext) + 1); // i know ext end with '\0'
+			// (filename->data + filename->len - ext) is the length of ext with dot
+			ngx_memmove(dot, ext, filename->data + filename->len - ext + 1);
 			filename->len -= (ext - dot);
 		}
 	}
